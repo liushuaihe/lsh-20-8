@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { Users, Plus, Minus, Calculator, Ticket, Info, User, GraduationCap, UserRound, Baby } from 'lucide-react';
 import { passengerFareRules } from '@/data/metroNetwork';
 import { useMetroStore } from '@/store/metroStore';
-import type { PassengerType, PassengerCount, FareCalculationResult } from '@/types/metro';
+import type { PassengerType, PassengerCount, FareCalculationResult, PassengerFareRule } from '@/types/metro';
 import { cn } from '@/lib/utils';
 
 const iconMap: Record<PassengerType, React.ReactNode> = {
@@ -19,6 +19,11 @@ const colorMap: Record<PassengerType, { bg: string; text: string; border: string
   child: { bg: 'bg-rose-100', text: 'text-rose-600', border: 'border-rose-200' },
 };
 
+function calcUnitPrice(baseFare: number, rule: PassengerFareRule) {
+  const discountedPrice = baseFare * rule.discount;
+  return Math.min(Math.max(discountedPrice, rule.minFare), rule.maxFare);
+}
+
 export default function FareCalculator() {
   const { highlightedRoute } = useMetroStore();
   const [passengers, setPassengers] = useState<PassengerCount>({
@@ -33,21 +38,19 @@ export default function FareCalculator() {
   const calculation = useMemo<FareCalculationResult | null>(() => {
     if (baseFare <= 0) return null;
 
-    const passengerResults = passengerFareRules.map((rule) => {
-      const count = passengers[rule.type];
-      const discountedPrice = baseFare * rule.discount;
-      const unitPrice = Math.min(Math.max(discountedPrice, rule.minFare), rule.maxFare);
-      const subtotal = unitPrice * count;
-      return {
-        type: rule.type,
-        count,
-        unitPrice,
-        subtotal,
-      };
-    });
+    const passengerResults: FareCalculationResult['passengers'] = [];
+    let totalFare = 0;
 
-    const totalPassengers = Object.values(passengers).reduce((sum, n) => sum + n, 0);
-    const totalFare = passengerResults.reduce((sum, p) => sum + p.subtotal, 0);
+    for (const rule of passengerFareRules) {
+      const type = rule.type;
+      const count = passengers[type];
+      const unitPrice = calcUnitPrice(baseFare, rule);
+      const subtotal = unitPrice * count;
+      totalFare += subtotal;
+      passengerResults.push({ type, count, unitPrice, subtotal });
+    }
+
+    const totalPassengers = passengers.adult + passengers.student + passengers.elderly + passengers.child;
     const fullPriceTotal = baseFare * totalPassengers;
     const totalDiscount = fullPriceTotal - totalFare;
 
@@ -58,12 +61,21 @@ export default function FareCalculator() {
       totalFare,
       totalDiscount,
     };
-  }, [baseFare, passengers]);
+  }, [baseFare, passengers.adult, passengers.student, passengers.elderly, passengers.child]);
 
-  const updatePassenger = (type: PassengerType, delta: number) => {
+  const handlePassengerBtn = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const type = e.currentTarget.dataset.type as PassengerType;
+    const delta = Number(e.currentTarget.dataset.delta);
+    if (!type || Number.isNaN(delta)) return;
     setPassengers((prev) => {
       const newValue = Math.max(0, prev[type] + delta);
-      return { ...prev, [type]: newValue };
+      return {
+        adult: prev.adult,
+        student: prev.student,
+        elderly: prev.elderly,
+        child: prev.child,
+        [type]: newValue,
+      } as PassengerCount;
     });
   };
 
@@ -71,7 +83,7 @@ export default function FareCalculator() {
     setPassengers({ adult: 1, student: 0, elderly: 0, child: 0 });
   };
 
-  const totalCount = Object.values(passengers).reduce((sum, n) => sum + n, 0);
+  const totalCount = passengers.adult + passengers.student + passengers.elderly + passengers.child;
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
@@ -108,8 +120,8 @@ export default function FareCalculator() {
             {passengerFareRules.map((rule) => {
               const colors = colorMap[rule.type];
               const count = passengers[rule.type];
+              const unitPrice = calcUnitPrice(baseFare, rule);
               const discountedPrice = baseFare * rule.discount;
-              const unitPrice = Math.min(Math.max(discountedPrice, rule.minFare), rule.maxFare);
               const hasCap = discountedPrice > rule.maxFare;
               const hasMin = discountedPrice < rule.minFare && rule.discount > 0;
 
@@ -152,7 +164,9 @@ export default function FareCalculator() {
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => updatePassenger(rule.type, -1)}
+                      data-type={rule.type}
+                      data-delta={-1}
+                      onClick={handlePassengerBtn}
                       disabled={count === 0}
                       className={cn(
                         'w-7 h-7 rounded-lg flex items-center justify-center transition-all',
@@ -167,7 +181,9 @@ export default function FareCalculator() {
                       {count}
                     </span>
                     <button
-                      onClick={() => updatePassenger(rule.type, 1)}
+                      data-type={rule.type}
+                      data-delta={1}
+                      onClick={handlePassengerBtn}
                       className={cn(
                         'w-7 h-7 rounded-lg flex items-center justify-center transition-all',
                         colors.bg,
@@ -198,18 +214,20 @@ export default function FareCalculator() {
               </div>
 
               <div className="space-y-1.5">
-                {calculation.passengers
-                  .filter((p) => p.count > 0)
-                  .map((p) => {
-                    const rule = passengerFareRules.find((r) => r.type === p.type)!;
-                    const colors = colorMap[p.type];
+                {passengerFareRules
+                  .filter((r) => passengers[r.type] > 0)
+                  .map((rule) => {
+                    const colors = colorMap[rule.type];
+                    const count = passengers[rule.type];
+                    const unitPrice = calcUnitPrice(baseFare, rule);
+                    const subtotal = unitPrice * count;
                     return (
-                      <div key={p.type} className="flex justify-between text-xs">
+                      <div key={rule.type} className="flex justify-between text-xs">
                         <span className="text-slate-500">
-                          {rule.label} × {p.count}
+                          {rule.label} × {count}
                         </span>
                         <span className={cn('font-medium', colors.text)}>
-                          ¥{p.subtotal.toFixed(2)}
+                          ¥{subtotal.toFixed(2)}
                         </span>
                       </div>
                     );
